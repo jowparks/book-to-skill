@@ -129,10 +129,21 @@ Store the answer as `BOOK_TYPE`:
 - Option 3 → `BOOK_TYPE=text`
 
 **If `BOOK_TYPE=technical`**, inform the user before proceeding:
-> "📐 Technical mode selected — using Docling for structure-aware extraction (tables, code blocks, formulas preserved as markdown). This takes ~1.5s per page, so expect a few minutes for longer sources. Starting now…"
+> "📐 Technical mode selected — PDFs are pre-converted with marker (Step 1.6); other formats use Docling for structure-aware extraction (tables, code blocks, formulas preserved as markdown). This takes ~1.5s per page, so expect a few minutes for longer sources. Starting now…"
 
 **If `BOOK_TYPE=text`**, inform:
 > "📄 Text mode selected — using the fastest suitable extractor for each file type. Plain text/Markdown/HTML are usually ready in seconds; PDFs use pdftotext when available."
+
+---
+
+## Step 1.6 — Pre-convert PDFs with marker
+
+If any input is a `.pdf`, convert it to Markdown with [marker](https://github.com/datalab-to/marker) before Step 2; its LLM pass turns equations into clean LaTeX, which Docling and the text extractors mangle. Marker is a separate tool, not a book-to-skill dependency. Resolve `SCRIPT_PATH` with the Step 2 probe, then use `MARKER_SH="$(dirname "$SCRIPT_PATH")/marker_convert.sh"`. It takes the API key from `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, or asks for it on the terminal (hidden), detects Claude vs OpenAI from the key prefix, and picks the model. Never ask the user to paste a key into the chat.
+
+1. Sample first: `bash "$MARKER_SH" --sample "<pdf>" "$(mktemp -d)"`. The last stdout line is the Markdown path. Exit 2 means marker is missing: offer `pip install marker-pdf` (pulls PyTorch) or skipping this step. Exit 3 means no key: ask the user to export `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, or run the same command in their own terminal, then continue.
+2. Show the user a few equations or tables from the sample and ask whether they look right. If not, or marker fails, say so and offer the built-in PDF extractors instead.
+3. Once confirmed, rerun without `--sample` into a new `mktemp -d` directory and replace the PDF in `INPUT_PATHS` with the resulting `.md`. Keep `BOOK_TYPE` as chosen in Step 1.5.
+4. Marker keeps figures only as image references. If the sample is figure-heavy, offer to caption the extracted images in the Markdown before Step 2.
 
 ---
 

@@ -17,6 +17,10 @@ Step 1.5 — "Technical or text-heavy book?"
      └── text      → pdftotext → pypdf → pdfminer  (instant)
      │
      ▼
+Step 1.6 — PDFs → marker (LLM pass, equations as LaTeX) → Markdown
+  (sample pages checked with you first; skip to keep the built-in PDF chain)
+     │
+     ▼
 scripts/extract.py <paths…> --mode <technical|text>
   per source: PDF → pdftotext/Docling · EPUB → ebooklib → stdlib zipfile · DOCX/HTML/RTF/…
   (one bad source is skipped with a warning; the rest still process)
