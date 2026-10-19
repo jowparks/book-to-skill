@@ -19,7 +19,7 @@ Step 1.5 — "Technical or text-heavy book?"
      ▼
 Step 1.6 — PDFs → marker (OCR, equations as LaTeX) → Markdown
   (sample pages checked with you first; skip to keep the built-in PDF chain)
-  → proofread in 10-page chunks by subagents against the page images
+  converted in resumable 10-page chunks, each proofread by a subagent against the page images
      │
      ▼
 scripts/extract.py <paths…> --mode <technical|text>

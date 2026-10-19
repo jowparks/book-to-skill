@@ -4,22 +4,30 @@
 # dependency. Its LLM pass is off: the agent proofreads the output instead
 # (SKILL.md Step 1.6), so no API key is needed.
 #
-# Usage: marker_convert.sh [--sample] <file.pdf> <output-dir>
+# Usage: marker_convert.sh [--sample] <file.pdf> <chunk-dir>
+#        marker_convert.sh --join <chunk-dir> <out.md>
 #        marker_convert.sh --install
+#
+# The PDF is converted in chunks of MARKER_CHUNK_PAGES pages (default 10),
+# one marker run each, written to <chunk-dir>/chunk-<first>-<last>.md
+# (1-based PDF pages) with figures beside them. A chunk is written only once
+# complete, and existing chunks are skipped, so an interrupted run resumes
+# where it stopped. Each page starts with a "{<0-based page index>}----"
+# marker line. --sample converts only the first 30 pages, as chunks a later
+# full run into the same directory reuses. On success the last line of
+# stdout is <chunk-dir>.
+#
+# --join concatenates the chunks in page order without the page markers.
 #
 # marker_single is taken from PATH, else from a private venv at MARKER_VENV
 # (default ~/.cache/book-to-skill/marker-venv). --install creates that venv
 # with the first Python >= 3.10 found (MARKER_PYTHON overrides the search)
 # and installs marker-pdf into it; it prints the marker_single path.
-#
-# Output is paginated ("{<page index>}----" before each page) so
-# marker_pages.py can split it for proofreading. --sample converts only the
-# first pages so the output can be checked before a full run.
-#
-# On success the last line of stdout is the path of the generated Markdown.
 set -euo pipefail
 
-SAMPLE_PAGES="0-30"
+SAMPLE_PAGES=30
+CHUNK_PAGES=${MARKER_CHUNK_PAGES:-10}
+PAGE_MARKER='^\{[0-9]+\}-{48}$'
 
 die() { printf 'marker_convert: %s\n' "$2" >&2; exit "$1"; }
 
@@ -51,31 +59,64 @@ if [ "${1:-}" = "--install" ]; then
   exit 0
 fi
 
+if [ "${1:-}" = "--join" ]; then
+  [ $# -eq 3 ] || die 64 "usage: marker_convert.sh --join <chunk-dir> <out.md>"
+  chunks=("$2"/chunk-*.md)
+  [ -f "${chunks[0]}" ] || die 66 "no chunks in $2"
+  # Glob order is page order: chunk names use zero-padded page numbers.
+  cat "${chunks[@]}" | grep -Ev "$PAGE_MARKER" | cat -s >"$3"
+  printf '%s\n' "$3"
+  exit 0
+fi
+
 sample=false
 if [ "${1:-}" = "--sample" ]; then sample=true; shift; fi
-[ $# -eq 2 ] || die 64 "usage: marker_convert.sh [--sample] <file.pdf> <output-dir>"
-pdf=$1
+[ $# -eq 2 ] || die 64 "usage: marker_convert.sh [--sample] <file.pdf> <chunk-dir>"
+pdf=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 out_dir=$2
-[ -f "$pdf" ] || die 66 "not a file: $pdf"
+[ -f "$pdf" ] || die 66 "not a file: $1"
 
 if command -v marker_single >/dev/null 2>&1; then
-  marker=marker_single
+  marker=$(command -v marker_single)
 elif [ -x "$MARKER_VENV/bin/marker_single" ]; then
   marker=$MARKER_VENV/bin/marker_single
 else
   die 2 "marker_single not found; install it with: marker_convert.sh --install"
 fi
 
-# --force_ocr: trusting a PDF's text layer drops most prose on scans whose only
-# text is a watermark, and OCR gets equations right far more often.
-args=(--force_ocr --output_format markdown --paginate_output --output_dir "$out_dir")
-if $sample; then args+=(--page_range "$SAMPLE_PAGES"); fi
+# Count pages with marker's own interpreter (marker depends on pypdfium2).
+# Run from / so a planted module in the caller's directory is never imported.
+py=$(head -1 "$marker" | sed -n 's/^#! *//p')
+pages=$(cd / && $py -c 'import sys, pypdfium2; print(len(pypdfium2.PdfDocument(sys.argv[1])))' "$pdf") ||
+  die 1 "could not count the pages of $pdf"
+# The sample ends on a chunk boundary so a later full run reuses its chunks.
+sample_pages=$(( (SAMPLE_PAGES + CHUNK_PAGES - 1) / CHUNK_PAGES * CHUNK_PAGES ))
+if $sample && [ "$pages" -gt "$sample_pages" ]; then pages=$sample_pages; fi
 
-printf 'marker_convert: %s%s\n' "$pdf" "$($sample && printf ' (sample pages %s)' "$SAMPLE_PAGES")" >&2
-"$marker" "$pdf" "${args[@]}" >&2
-
+mkdir -p "$out_dir"
+rm -rf "$out_dir"/.work.*  # left by an interrupted run
 stem=$(basename "$pdf")
 stem=${stem%.*}
-md="$out_dir/$stem/$stem.md"
-[ -f "$md" ] || die 1 "marker finished but $md was not created"
-printf '%s\n' "$md"
+total=$(( (pages + CHUNK_PAGES - 1) / CHUNK_PAGES ))
+n=0
+for (( first = 1; first <= pages; first += CHUNK_PAGES )); do
+  n=$((n + 1))
+  last=$(( first + CHUNK_PAGES - 1 ))
+  if [ "$last" -gt "$pages" ]; then last=$pages; fi
+  chunk=$(printf '%s/chunk-%05d-%05d.md' "$out_dir" "$first" "$last")
+  if [ -f "$chunk" ]; then
+    printf 'marker_convert: chunk %d/%d (pages %d-%d) already done\n' "$n" "$total" "$first" "$last" >&2
+    continue
+  fi
+  work=$(mktemp -d "$out_dir/.work.XXXXXX")
+  # --force_ocr: trusting a PDF's text layer drops most prose on scans whose
+  # only text is a watermark, and OCR gets equations right far more often.
+  "$marker" "$pdf" --force_ocr --output_format markdown --paginate_output \
+    --page_range "$((first - 1))-$((last - 1))" --output_dir "$work" >&2
+  [ -f "$work/$stem/$stem.md" ] || die 1 "marker finished but wrote no Markdown for pages $first-$last"
+  find "$work/$stem" -type f ! -name "$stem.md" ! -name "${stem}_meta.json" -exec mv {} "$out_dir/" \;
+  mv "$work/$stem/$stem.md" "$chunk"
+  rm -rf "$work"
+  printf 'marker_convert: chunk %d/%d (pages %d-%d) done\n' "$n" "$total" "$first" "$last" >&2
+done
+printf '%s\n' "$out_dir"
