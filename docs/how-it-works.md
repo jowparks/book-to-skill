@@ -17,8 +17,9 @@ Step 1.5 — "Technical or text-heavy book?"
      └── text      → pdftotext → pypdf → pdfminer  (instant)
      │
      ▼
-Step 1.6 — PDFs → marker (LLM pass, equations as LaTeX) → Markdown
+Step 1.6 — PDFs → marker (OCR, equations as LaTeX) → Markdown
   (sample pages checked with you first; skip to keep the built-in PDF chain)
+  → proofread in 10-page chunks by subagents against the page images
      │
      ▼
 scripts/extract.py <paths…> --mode <technical|text>

@@ -1,6 +1,6 @@
-"""scripts/marker_convert.sh picks marker's LLM service from the API key and
-keeps the key out of marker's argv. A fake `marker_single` on PATH records
-what it was called with.
+"""scripts/marker_convert.sh runs marker without its LLM pass (no API key)
+and with paginated output, and can install marker into a private venv. A fake
+`marker_single` records what it was called with.
 """
 
 import json
@@ -18,12 +18,11 @@ FAKE_MARKER = """#!{python}
 import json, os, sys
 from pathlib import Path
 args = sys.argv[1:]
-config = Path(args[args.index("--config_json") + 1]).read_text()
 out = Path(args[args.index("--output_dir") + 1])
 stem = Path(args[0]).stem
 (out / stem).mkdir(parents=True)
 (out / stem / (stem + ".md")).write_text("# Converted\\n")
-Path(os.environ["FAKE_MARKER_LOG"]).write_text(json.dumps({{"argv": args, "config": json.loads(config)}}))
+Path(os.environ["FAKE_MARKER_LOG"]).write_text(json.dumps({{"argv": args}}))
 """
 
 # Stands in for a Python >= 3.10 interpreter (or one too old, if
@@ -83,44 +82,23 @@ def run(tmp_path):
     return _run
 
 
-def test_claude_key_selects_claude_service(run, tmp_path):
-    key = "sk-ant-api03-secret"
-    proc, record = run(ANTHROPIC_API_KEY=key)
+def test_converts_without_llm_pass_or_api_key(run, tmp_path):
+    proc, record = run()  # no key in the environment, no terminal
 
     assert proc.returncode == 0, proc.stderr
     argv = record["argv"]
-    assert argv[argv.index("--llm_service") + 1] == "marker.services.claude.ClaudeService"
-    assert record["config"] == {"claude_api_key": key, "claude_model_name": "claude-sonnet-5-5"}
-    assert key not in " ".join(argv)
+    assert "--use_llm" not in argv
+    assert "--force_ocr" in argv
+    assert "--paginate_output" in argv, "marker_pages.py split needs page markers"
     assert "--page_range" not in argv
     assert proc.stdout.strip().splitlines()[-1] == str(tmp_path / "out" / "my book" / "my book.md")
-    assert not list(tmp_path.glob("marker-config.*")), "config with the key was left behind"
 
 
-def test_openai_key_selects_openai_service_and_sample_limits_pages(run):
-    key = "sk-proj-secret"
-    proc, record = run("--sample", OPENAI_API_KEY=key, MARKER_MODEL="gpt-x")
+def test_sample_limits_pages(run):
+    proc, record = run("--sample")
 
     assert proc.returncode == 0, proc.stderr
-    argv = record["argv"]
-    assert argv[argv.index("--llm_service") + 1] == "marker.services.openai.OpenAIService"
-    assert record["config"] == {"openai_api_key": key, "openai_model": "gpt-x"}
-    assert key not in " ".join(argv)
-    assert "--page_range" in argv
-
-
-@pytest.mark.parametrize(
-    "keys",
-    [
-        {},  # no key and no terminal to ask on
-        {"OPENAI_API_KEY": "AIza-not-openai"},
-    ],
-)
-def test_missing_or_unrecognized_key_exits_3_without_running_marker(run, keys):
-    proc, record = run(**keys)
-
-    assert proc.returncode == 3
-    assert record is None
+    assert "--page_range" in record["argv"]
 
 
 @pytest.fixture
@@ -140,7 +118,7 @@ def test_install_creates_venv_that_later_runs_use(run, tmp_path, fake_python):
     assert proc.stdout.strip().splitlines()[-1] == str(venv_marker)
     assert venv_marker.exists()
 
-    proc, record = run(marker_on_path=False, ANTHROPIC_API_KEY="sk-ant-x")
+    proc, record = run(marker_on_path=False)
     assert proc.returncode == 0, proc.stderr
     assert record is not None, "conversion did not use the venv's marker_single"
 
@@ -153,7 +131,7 @@ def test_install_refuses_python_older_than_3_10(run, tmp_path, fake_python):
 
 
 def test_missing_marker_exits_2_and_points_at_install(run):
-    proc, record = run(marker_on_path=False, ANTHROPIC_API_KEY="sk-ant-x")
+    proc, record = run(marker_on_path=False)
 
     assert proc.returncode == 2
     assert "--install" in proc.stderr
